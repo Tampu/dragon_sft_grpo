@@ -160,7 +160,7 @@ box-annotated examples in its whole 1122-file train pool.
 
 Contract schema: `{id, question, choices, answer, image_path, bbox[], explanation_raw}`.
 
-### 2.2 Select the 2 000-sample SFT pool
+### 2.2 Select the 2000-sample SFT pool
 
 ```bash
 python3 scripts/build_dragon6_sft2k.py
@@ -176,7 +176,7 @@ Three filters, then domain balancing:
 
 Then an **equal quota per domain** (not proportional to raw size, which would
 let ChartQA/ai2d dominate and skew the learned format habits), with any
-shortfall redistributed round-robin. Result: exactly 2 000
+shortfall redistributed round-robin. Result: exactly 2000
 (354/353/352/352/237/352 — MapIQ is capacity-bound at 237).
 
 Output: `dragon_datasets_sft2k/raw_sft2k_records.jsonl`.
@@ -253,7 +253,7 @@ mismatches records.
 
 ## 3. GRPO
 
-### 3.1 The 5 000-prompt pool
+### 3.1 The 5000-prompt pool
 
 ```bash
 python3 dragon_grpo/build_grpo5k_pool.py
@@ -267,7 +267,7 @@ Excludes everything already spent on SFT-train **and** SFT-eval, by
 `(image, id)`. It re-walks the full `split_reviewed-2` pool rather than
 taking "what's left in samples.jsonl", because that file was itself only a
 500/300-per-domain cap on a much larger raw pool (1122–1400 files/domain).
-Yields 5 000 balanced 833–834 per domain.
+Yields 5000 balanced 833–834 per domain.
 
 The `>15 boxes` filter is **deliberately not applied here** — the GRPO
 reward's `w_miss` term exists precisely to give gradient on dense multi-box
@@ -337,7 +337,7 @@ is the most likely explanation for KL sitting at ~1.0–1.4 here versus
 ~0.03–0.05 in the unconstrained pilot. It did not produce collapse — val rose
 at every checkpoint — but it should be stated as a limitation.
 
-Run: 2 500 steps / 5 000 prompts / 1 epoch, ~19 h on one H200,
+Run: 2500 steps / 5000 prompts / 1 epoch, ~19 h on one H200,
 5 checkpoints × 165 MB.
 
 ---
