@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# Symlinks to data / model / output trees that live outside this folder.
+# These are NOT part of the repo: together they are ~42 GB (hf_home 33 G,
+# outputs 6.2 G, Diagram_Attribution_Dataset 2.6 G). Committing them as
+# symlinks would also produce dangling links on any fresh clone.
+# Recreate them after cloning -- see "Setup after cloning" in README.md.
+# ---------------------------------------------------------------------------
+/InternVL
+/Diagram_Attribution_Dataset
+/split_reviewed-2
+/dragon_datasets
+/dragon_datasets_sft2k
+/dragon_datasets_grpo
+/hf_home
+/outputs
+
+# Datasets / checkpoints / predictions, in case any are ever copied in here
+*.jsonl
+*.safetensors
+*.bin
+*.pt
+*.pth
+preds_for_eval/
+norepeat_test/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

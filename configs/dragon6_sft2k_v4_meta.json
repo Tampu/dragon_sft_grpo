@@ -1,0 +1,9 @@
+{
+  "dragon_sft2k_v4": {
+    "root": "/mnt/data2/traviku2/Diagram_Attribution_Dataset/",
+    "annotation": "/mnt/data2/traviku2/dragon_datasets_sft2k/sft2k_grounding_v4.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "max_dynamic_patch": 12
+  }
+}
