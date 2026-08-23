@@ -1,4 +1,4 @@
-# DRAGON — QA-conditioned visual grounding: SFT → GRPO → eval
+# DRAGON: QA-conditioned visual grounding: SFT → GRPO → eval
 
 Self-contained copy of every script needed to reproduce the SFT run, the GRPO
 run, and the evaluation, for InternVL3-8B on six diagram/chart/map QA datasets.
