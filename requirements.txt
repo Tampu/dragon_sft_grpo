@@ -1,0 +1,64 @@
+# DRAGON SFT/GRPO pipeline — dependencies
+#
+# Versions below are the ones the reported results were produced with
+# (venv `da_env_flash`, Python 3.12.3). The CUDA pairing is load-bearing:
+# torch is built against cu128 and system nvcc is 12.8, which is what lets
+# flash-attn compile. A second venv here (`da_env2`) has torch built against
+# cu130 and flash-attn CANNOT be installed into it -- if flash-attn fails to
+# build, check `nvcc --version` against `torch.version.cuda` before anything
+# else.
+#
+# Install torch/torchvision from the cu128 index first, then the rest:
+#   pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements.txt
+
+# --- core ---
+transformers==5.8.1
+peft==0.19.1
+accelerate==1.13.0
+deepspeed==0.19.2
+timm==1.0.28
+safetensors==0.7.0
+tokenizers==0.22.2
+sentencepiece==0.2.1
+einops==0.8.2
+
+# --- attention kernel (needs nvcc matching torch's CUDA build) ---
+flash-attn==2.8.3.post1
+
+# --- data / imaging / metrics ---
+Pillow==12.2.0
+numpy==2.4.4
+shapely==2.1.2          # required ONLY by eval_script.py (GroupIoU via unary_union)
+
+# --- torch/torchvision, listed for reference; install from the cu128 index above ---
+# torch==2.11.0+cu128
+# torchvision==0.26.0+cu128
+
+# =====================================================================
+# DELIBERATELY NOT INSTALLED — read before adding
+# =====================================================================
+#
+# scipy
+#   Imported inside try/except in three places for optimal 1:1 (Hungarian)
+#   box matching, each with a GREEDY fallback:
+#       dragon_grpo/export_for_eval_script.py : bijective_rpf1()
+#       dragon_grpo/grpo_dragon6_v1.py        : hungarian_match()  <-- the REWARD
+#       scripts/sft_v4_phase0.py              : match_boxes()
+#   scipy was NOT present when the reported results were produced, so every
+#   published number -- including the GRPO training reward -- used the greedy
+#   matcher. Installing scipy silently switches all three to Hungarian, which
+#   will change the bijective-F1 numbers and the RL reward. Do not add it
+#   mid-project without re-running, and state which matcher was used.
+#
+# orjson        optional fast-JSON path in internvl_chat_finetune.py (falls back to json)
+# petrel-client optional ceph image loader (falls back to PIL)
+# liger-kernel  optional fused-kernel patch, only if explicitly enabled
+#
+# =====================================================================
+# NOT a pip package
+# =====================================================================
+# The `internvl` package comes from the InternVL repo checkout symlinked at
+# the project root (see README §0). Model weights (OpenGVLab/InternVL3-8B)
+# download to whatever HF_HOME points at -- set it, or from_pretrained will
+# fill the root disk.

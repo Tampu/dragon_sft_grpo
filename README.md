@@ -7,6 +7,12 @@ run, and the evaluation, for InternVL3-8B on six diagram/chart/map QA datasets.
 bounding box(es) that *justify* that answer. Pure grounding: the model is
 never shown candidate regions to choose from, it must localise them itself.
 
+> **Start here.** Read [`DATASET.md`](DATASET.md) first — it is the authoritative
+> record of what data each stage saw, every filter applied, and the measured
+> overlaps between pools. [`RESULTS.md`](RESULTS.md) has the test-split numbers.
+> Dependencies and a critical `scipy` caveat are in
+> [`requirements.txt`](requirements.txt).
+
 **Coordinates** are integers in `[0, 1000]`, `xyxy`, normalized to image
 width/height, sorted top-to-bottom then left-to-right, near-duplicates
 collapsed. This is the single coordinate convention used end to end —
@@ -73,9 +79,23 @@ done
 | `hf_home` | HF cache holding the InternVL3-8B snapshot |
 | `outputs` | where checkpoints are written |
 
-Python deps: `torch`, `transformers`, `peft`, `deepspeed`, `timm`, `flash-attn`,
-`Pillow`, `numpy`, `scipy`, `shapely` (`shapely` is needed only by
-`eval_script.py`).
+Python deps: see [`requirements.txt`](requirements.txt) for pinned versions.
+
+```bash
+pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+```
+
+The CUDA pairing is load-bearing: torch is built against cu128 and system
+`nvcc` is 12.8, which is what lets flash-attn compile.
+
+> **`scipy` is deliberately absent.** Three modules import it in `try/except`
+> for optimal 1:1 box matching, each with a **greedy fallback**:
+> `grpo_dragon6_v1.hungarian_match` (**the GRPO reward**),
+> `export_for_eval_script.bijective_rpf1`, `sft_v4_phase0.match_boxes`.
+> scipy was not installed when these results were produced, so every reported
+> number — including the RL reward — used **greedy** matching. Installing scipy
+> silently switches all three to Hungarian and will change those numbers.
 
 ---
 
@@ -344,12 +364,32 @@ Run: 2500 steps / 5000 prompts / 1 epoch, ~19 h on one H200,
 
 ## 4. Evaluation
 
-### 4.1 Per-domain, the paper numbers
+### 4.1 Per-domain on the official test split — the paper numbers
 
 ```bash
-python3 scripts/build_dragon6_holdout600.py    # if not already built
-# split the 592 into per-domain files (see §4.3), then:
-bash dragon_grpo/run_export_ckpt.sh 2500 0 6 7
+python3 dragon_grpo/build_test2445.py                   # build the 2,432-item test set
+for arm in base sft grpo; do
+  bash dragon_grpo/run_test2445_eval.sh $arm 0 3 4 5 6 7
+done
+python3 dragon_grpo/three_arm_table.py                  # base/SFT/GRPO per domain
+```
+
+`run_test2445_eval.sh <base|sft|grpo> <gpu>...` round-robins the six domains
+across the given GPUs and finishes by running `eval_script.py` unmodified. The
+`base` arm uses `--no-adapters`, which disables (rather than merges) the SFT
+LoRA so pristine InternVL3-8B runs through an otherwise identical harness —
+same tokenizer, tiling, decode path and system prompt, weights the only
+variable.
+
+> **The 592-sample holdout is NOT the paper number.** It is drawn from `Val/`,
+> and **62% of its images also appear in the GRPO training pool** (different
+> questions, same pictures). Treat holdout results as training diagnostics.
+> Only `TEST2445_*` results belong in a comparison table. See `DATASET.md` §7.
+
+Legacy path, holdout only:
+
+```bash
+bash dragon_grpo/run_export_ckpt.sh 2500 0 6 7          # scores the 592 holdout
 ```
 
 `run_export_ckpt.sh <step> <gpu>...` round-robins the six domains across the
@@ -406,13 +446,31 @@ multi-domain measurement.**
 
 ## 5. Results
 
-Macro-average over the six domains, 592 held-out samples, via `eval_script.py`:
+Macro-average over the six domains on the **official test split (n = 2,432)**,
+via `eval_script.py` unmodified:
 
-| metric | SFT | GRPO @1000 | GRPO @2500 |
+| metric | base | SFT | GRPO @2500 | Δ GRPO−base |
+|---|---|---|---|---|
+| MeanIoU | 0.0578 | 0.2668 | **0.3807** | +0.3229 |
+| MaxIoU | 0.1607 | 0.5213 | **0.6614** | +0.5006 |
+| GroupIoU | 0.0844 | 0.2471 | **0.3259** | +0.2415 |
+| F1@50 | 0.0410 | 0.2968 | **0.4047** | +0.3637 |
+| F1@70 | 0.0112 | 0.2100 | **0.3074** | +0.2962 |
+| Recall@90 | 0.0006 | 0.0705 | **0.1391** | +0.1384 |
+
+Per-domain F1@50:
+
+| domain | base | SFT | GRPO @2500 |
 |---|---|---|---|
-| MeanIoU | 0.2806 | 0.3689 | **0.4018** |
-| F1@50 | 0.3162 | 0.3786 | **0.4174** |
-| Recall@90 | 0.0754 | 0.1172 | **0.1495** |
+| AI2D | 0.1524 | 0.5025 | **0.5674** |
+| ChartQA | 0.0327 | 0.4304 | **0.5391** |
+| Circuit-VQA | 0.0120 | 0.1810 | **0.2098** |
+| InfographicsVQA | 0.0199 | 0.1736 | **0.2603** |
+| MapIQ | 0.0142 | 0.2119 | **0.4667** |
+| MapWise | 0.0150 | 0.2815 | **0.3850** |
+
+Monotone base → SFT → GRPO on every metric in every domain. Full tables,
+the contamination audit, and both matching rules: [`RESULTS.md`](RESULTS.md).
 
 Per-domain MeanIoU at step 2500 vs SFT: ai2d 0.407→0.532, chartqa
 0.408→0.499, circuitvqa 0.206→0.302, infographics 0.197→0.227, mapiq
