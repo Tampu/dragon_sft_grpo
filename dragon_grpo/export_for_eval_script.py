@@ -236,7 +236,14 @@ def parse_pred_boxes(text: str) -> List[Box]:
             payload = [payload]
         for b in payload:
             if isinstance(b, (list, tuple)) and len(b) == 4:
-                boxes.append(tuple(float(v) for v in b))
+                # len==4 does not imply 4 NUMBERS: models sometimes emit a text
+                # label or a nested list in a coordinate slot, and the bare
+                # float() below raised OUTSIDE the literal_eval try. Skip the
+                # malformed entry rather than crash the caller.
+                try:
+                    boxes.append(tuple(float(v) for v in b))
+                except (TypeError, ValueError):
+                    continue
     if boxes:
         return boxes
     m = V3_ANSWER_RE.search(text)
@@ -266,18 +273,34 @@ def load_model(args):
     --grpo-checkpoint = optional grpo-stepN adapter dir; if given, it's
         applied (not merged) on top of the SFT-merged base, same
         reconstruction compare_sft_vs_grpo.py already validated.
+    --no-adapters = BASE arm: load the pristine InternVL3-8B weights with the
+        LoRA adapters present-but-disabled, rather than merged. Everything
+        else -- tokenizer (incl. the <ref>/<box> special tokens), tiling,
+        decode path, and the grounding system prompt carried in the SFT
+        checkpoint's config.json -- stays identical, so the only variable
+        across arms is the trained weights. Same construction as
+        causal_transfer_eval.load_arm's base arm.
     """
     import torch
     from internvl_lora_checkpoint_io import _ensure_internvl_repo_on_path, load_lora_checkpoint
     _ensure_internvl_repo_on_path()  # must run before ANY internvl.* import below
     from internvl.train.constants import IMG_CONTEXT_TOKEN
 
+    no_adapters = getattr(args, "no_adapters", False)
     model, tokenizer = load_lora_checkpoint(
         checkpoint_dir=args.checkpoint, device=args.device,
-        dtype=torch.bfloat16, hf_cache_dir=args.hf_cache_dir, merge_lora=True)
+        dtype=torch.bfloat16, hf_cache_dir=args.hf_cache_dir,
+        merge_lora=not no_adapters)
     model.img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
-    if getattr(args, "grpo_checkpoint", None):
+    if no_adapters:
+        for sub in (model.language_model, model.vision_model):
+            try:
+                sub.disable_adapter_layers()
+            except Exception as e:
+                print(f"[warn] disable_adapter_layers failed on {type(sub).__name__}: {e}")
+        print("[load] BASE arm: SFT/vision LoRA disabled (not merged)")
+    elif getattr(args, "grpo_checkpoint", None):
         from peft import PeftModel
         model.language_model = PeftModel.from_pretrained(model.language_model, args.grpo_checkpoint)
         model.language_model = model.language_model.to(args.device)
@@ -390,6 +413,9 @@ def main() -> None:
     p.add_argument("--grpo-checkpoint", default=None,
                    help="Optional grpo-stepN adapter dir, applied on top of --checkpoint's "
                         "merged SFT weights. Omit to score the plain SFT checkpoint.")
+    p.add_argument("--no-adapters", action="store_true",
+                   help="BASE arm: disable (don't merge) the SFT LoRA, scoring pristine "
+                        "InternVL3-8B through an otherwise identical harness.")
     p.add_argument("--hf-cache-dir", type=str, default=None)
     p.add_argument("--jsonl", required=True,
                    help="A single-domain DRAGON jsonl (from sft_v4_phase0.py convert).")
