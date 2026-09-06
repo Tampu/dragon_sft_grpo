@@ -7,7 +7,7 @@ run, and the evaluation, for InternVL3-8B on six diagram/chart/map QA datasets.
 bounding box(es) that *justify* that answer. Pure grounding: the model is
 never shown candidate regions to choose from, it must localise them itself.
 
-> **Start here.** Read [`DATASET.md`](DATASET.md) first — it is the authoritative
+> **Start here.** Read [`DATASET.md`](DATASET.md) first - it is the
 > record of what data each stage saw, every filter applied, and the measured
 > overlaps between pools. [`RESULTS.md`](RESULTS.md) has the test-split numbers.
 > Dependencies and a critical `scipy` caveat are in
