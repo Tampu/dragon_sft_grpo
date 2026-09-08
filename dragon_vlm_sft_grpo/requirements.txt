@@ -1,0 +1,42 @@
+# dragon_vlm_sft_grpo -- dependencies
+#
+# This repo is model-agnostic by design (see scripts/model_config.py), so
+# unlike dragon_sft_grpo there is no InternVL-repo checkout or hand-pinned
+# flash-attn/CUDA pairing baked into the setup -- whatever `transformers`
+# version supports your chosen model_config's model_id is the version to
+# install. Pin AFTER you've confirmed your model loads; this file lists
+# floors, not exact pins, since "generic" and "hand-pinned to one model's
+# tested combination" are in tension.
+
+transformers>=4.57          # needs whatever version first supports your model_config's
+                             # model_id -- check that model's HF page for the minimum
+                             # version *before* installing; Qwen3-VL and recent Qwen
+                             # releases have required very new transformers.
+accelerate>=1.0
+peft>=0.13                  # target_modules="all-linear" (model_config.apply_lora)
+                             # needs a peft new enough to support the literal string
+torch>=2.4
+torchvision
+Pillow
+numpy
+shapely                     # required ONLY by dragon_grpo/eval_script.py (GroupIoU)
+
+# optional, model-family specific -- install if your model_config points at
+# a Qwen-VL-family model and you want its smart-resize preprocessing helper:
+# qwen-vl-utils
+
+# =====================================================================
+# DELIBERATELY NOT PINNED -- read before pinning
+# =====================================================================
+# flash-attn / attn_implementation: set per-model in configs/models/*.json
+# ("attn_implementation" field). Whether flash-attn builds at all depends
+# on your CUDA toolkit vs. torch's CUDA build (see dragon_sft_grpo's own
+# requirements.txt for the kind of mismatch to watch for) -- unset the
+# field (falls back to the model's default attention implementation) if
+# flash-attn won't build in your environment rather than fighting it.
+#
+# scipy: box_matching.hungarian_match() imports it in a try/except with a
+# GREEDY fallback if it's absent. Record which matcher a given run actually
+# used (print a warning at import time if you want this to be loud) --
+# installing scipy mid-project changes both the bijective eval numbers and
+# the RL reward, same caveat dragon_sft_grpo/requirements.txt documents.
