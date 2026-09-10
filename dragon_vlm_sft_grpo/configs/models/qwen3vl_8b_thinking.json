@@ -11,11 +11,22 @@
   "enable_thinking": true,
   "chat_template_kwargs": {},
 
+  "image_processor_kwargs": {},
+  "image_processor_attrs": {},
+
   "lora": {
     "r": 16,
     "alpha": 32,
     "dropout": 0.05,
     "target_modules": "all-linear",
+    "modules_to_save": null
+  },
+
+  "grpo_lora": {
+    "r": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "target_modules": "language-model-linear",
     "modules_to_save": null
   },
 

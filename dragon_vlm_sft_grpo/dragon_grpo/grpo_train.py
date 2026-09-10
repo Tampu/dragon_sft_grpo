@@ -75,7 +75,14 @@ def load_policy(args, cfg):
 
     for p in model.parameters():
         p.requires_grad = False
-    model = apply_lora(model, cfg)  # fresh GRPO adapter; base (+ merged SFT) stays frozen
+    # lora_key="grpo_lora": language-model-only by default (vision tower and
+    # connector/projector stay frozen) -- deliberately NARROWER than SFT's
+    # "lora" (all-linear) scope. See model_config.py's module docstring:
+    # letting the vision encoder move under GRPO's sparse, noisy reward is a
+    # known way to quietly degrade grounding quality even if some proxy
+    # reward rises, which is why dragon_sft_grpo's own GRPO design freezes
+    # the vision stack too.
+    model = apply_lora(model, cfg, lora_key="grpo_lora")
     model.to(args.device)
     return model, processor
 
@@ -251,9 +258,18 @@ def main() -> None:
 
 @torch.no_grad()
 def run_val(model, processor, val_samples, image_root, args, cfg, step, metrics_f, pad_id) -> None:
+    """Greedy decode, but max_new_tokens / no_repeat_ngram_size are taken
+    from cfg.grpo_generation -- the SAME dict rollout sampling uses -- not
+    cfg.generation_defaults (that one is for the base/SFT/GRPO eval-export
+    arms, a separate concern). If these two diverged, in-training val would
+    silently measure a differently-decoded policy than the one actually
+    being trained against; dragon_sft_grpo's README documents losing a
+    training cycle to exactly this class of mismatch. do_sample=False stays
+    val's own deliberate choice (a clean, deterministic read of the current
+    policy), independent of rollout's sampling temperature."""
     w = RewardWeights()
     ious, f1s = [], []
-    gen_defaults = cfg.generation_defaults
+    gen_defaults = cfg.grpo_generation
     for s in val_samples:
         try:
             item = build_prompt_item(s, image_root, processor, cfg)

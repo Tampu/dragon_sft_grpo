@@ -121,6 +121,45 @@ explicit reasoning before localization actually helps IoU is then a live,
 reward-shaped question rather than something hand-authored. Flip the flag
 to `false` for the simpler direct-answer behavior.
 
+### Controlling image resolution / tiling
+
+By default this repo does **no** image resizing of its own -- every
+`processor(text=..., images=[image], ...)` call (`train_sft.py`,
+`grpo_train.py`, `export_for_eval.py`) hands the image straight to the
+loaded model's own `image_processor`, which reads its checkpoint's
+`preprocessor_config.json` and decides the target size/tile count itself.
+`dragon_sft_grpo`'s pipeline made this an explicit, tuned hyperparameter
+(`dynamic_image_size`, `max_dynamic_patch=12`, `force_image_size=448`); the
+generic pipeline exposes the same kind of control, but through two
+model-agnostic config fields rather than InternVL-specific ones:
+
+```json
+{
+  "image_processor_kwargs": {"min_pixels": 200704, "max_pixels": 1003520},
+  "image_processor_attrs": {}
+}
+```
+
+- **`image_processor_kwargs`** -- passed straight into
+  `AutoProcessor.from_pretrained(model_id, **image_processor_kwargs)`. Use
+  this for a processor that takes sizing as constructor arguments (the
+  Qwen-VL family's `min_pixels`/`max_pixels`, controlling the smart-resize
+  range in total pixel count). The example values above are illustrative,
+  not verified against Qwen3-VL-8B-Thinking's actual defaults -- check
+  that model's own `preprocessor_config.json` on the HF hub before trusting
+  a specific number, then raise/lower from there.
+- **`image_processor_attrs`** -- applied via `setattr()` on
+  `processor.image_processor` *after* loading. Use this for a processor
+  that exposes sizing as a mutable attribute instead of a constructor
+  kwarg (e.g. a `size` dict, or a tile-count field). Unknown attribute
+  names are logged as a warning and skipped, not silently ignored.
+
+Both default to `{}` in the shipped config -- i.e. whatever the checkpoint
+ships with, unchanged. Since resolution directly affects how well small/
+thin evidence boxes can be localized (see `dragon_sft_grpo/RESULTS.md`'s
+"thin-box floor" finding), this is one of the first things worth comparing
+explicitly across models rather than leaving implicit.
+
 ---
 
 ## 2. Data pipeline
@@ -183,6 +222,70 @@ box), token-level PPO-clip with a k3 KL penalty against the SFT policy
 (GRPO adapter disabled via `peft`'s `disable_adapter()` -- no second model
 copy in memory).
 
+**LoRA scope is deliberately asymmetric between stages** -- this is easy to
+get wrong when writing a new model_config, and getting it wrong looks like
+"GRPO made things worse" rather than an obvious error, so it's called out
+here explicitly:
+
+| stage | config field | default scope | why |
+|---|---|---|---|
+| SFT (`train_sft.py`) | `lora` | `"all-linear"` -- vision tower + connector + LLM | dense, well-labeled gradient; extra capacity generally helps |
+| GRPO (`grpo_train.py`) | `grpo_lora` | `"language-model-linear"` -- LLM only, vision tower + connector frozen | sparse, noisy RL reward; letting the vision encoder drift under it is a known way to quietly degrade grounding even as some proxy reward rises -- matches `dragon_sft_grpo`'s own GRPO design ("mlp1 and the whole vision stack are frozen; GRPO trains only the new adapter") |
+
+`"language-model-linear"` is resolved at runtime by grepping the loaded
+model's `named_modules()` for `nn.Linear` layers whose dotted name contains
+`language_model` (the attribute name HF's unified VLM refactor uses across
+Llava/Qwen\*VL/InternVL-style `ForConditionalGeneration` ports). If your
+model doesn't follow that naming convention, `apply_lora` raises with the
+actual top-level submodule names rather than silently falling back to
+`"all-linear"` -- set `grpo_lora.target_modules` to an explicit list in
+that case.
+
+### Running a mixed vision+language GRPO LoRA as a parallel ablation arm
+
+Language-model-only is the recommended default (§ above explains why), but
+it's a real, testable question whether giving the vision tower *some*
+(smaller) capacity during GRPO helps rather than hurts. Rather than jumping
+straight to full `all-linear` for GRPO -- which is what caused the original
+regression -- use `grpo_lora.rank_pattern`/`alpha_pattern` (`peft`'s
+per-module rank/alpha override, a `{regex: value}` dict matched by
+`re.search` against each LoRA-wrapped layer's dotted name) to give vision a
+much smaller rank than the language model, in the SAME adapter:
+
+```json
+"grpo_lora": {
+  "r": 16, "alpha": 32, "dropout": 0.05,
+  "target_modules": "all-linear",
+  "rank_pattern": {"vision|visual": 4},
+  "alpha_pattern": {"vision|visual": 8}
+}
+```
+
+`configs/models/qwen3vl_8b_thinking_grpo_mixed_lora.json` ships this as a
+ready-to-run second config -- point a second `grpo_train.py` invocation at
+it (different `--output-dir`, run on a different GPU or after the first)
+and compare its `eval_script.py` numbers against the language-model-only
+run as a genuine three-way ablation (LLM-only vs. mixed-rank vs., if you
+want a third point, full `all-linear`), rather than switching your one run
+between them blind.
+
+**The vision-submodule regex (`"vision|visual"`) is a starting guess, not a
+verified fact about any specific model** -- HF's naming is consistent for
+`.language_model` across ported VLMs but *not* for the vision side
+(`.vision_tower`/`.vision_model` in some families, `.visual` in Qwen2/2.5-VL).
+`apply_lora` prints a match-count report at startup for exactly this
+reason:
+
+```
+[apply_lora] rank_pattern pattern 'vision|visual' -> 4: matches 291/583 candidate Linear layers (OK)
+[apply_lora] top-level submodule names present on this model: ['language_model', 'model', ...]
+```
+
+If it instead says `matches 0 layers`, the regex didn't hit anything on
+your model -- read the "top-level submodule names" line it prints right
+after, fix the regex to match what's actually there, and don't trust a run
+where this warning fired.
+
 ## 5. Evaluation
 
 ```bash
@@ -227,20 +330,31 @@ run, check:
    few hundred MB (LoRA + connector, if `target_modules="all-linear""`
    caught it), not multiple GB -- a huge checkpoint means the LoRA wrap
    didn't take and the full base model params are being saved.
-3. **GRPO rollout expansion**: with `--group-size 8`, print
+3. **GRPO LoRA scope, at `grpo_train.py` startup**: `apply_lora`'s
+   `print_trainable_parameters()` plus the `[apply_lora] lora_key='grpo_lora':
+   LoRA-wrapping N language-model Linear layers (vision tower / connector
+   frozen)` line should show a trainable-parameter count consistent with
+   LLM-only LoRA, not the (much larger) count SFT's log showed for
+   `all-linear`. If they're suspiciously close, `grpo_lora.target_modules`
+   silently fell through to something broader than intended -- check the
+   model_config, don't assume the default resolved correctly for a new
+   model. Getting this wrong looks exactly like "GRPO regressed the score"
+   with no other symptom, since it doesn't crash -- it just quietly trains
+   the vision encoder with a noisy RL signal.
+4. **GRPO rollout expansion**: with `--group-size 8`, print
    `gen.shape[0]` after the first `model.generate(...,
    num_return_sequences=8)` call -- it must be `8`, and the 8 decoded texts
    for one prompt must actually differ from each other (confirms
    `pixel_values`/image-grid metadata expanded correctly alongside
    `input_ids`, not just repeated the same single-image forward pass by
    accident).
-4. **Decode sanity**: print one raw rollout's decoded text before parsing.
+5. **Decode sanity**: print one raw rollout's decoded text before parsing.
    If a `<think>` block is present in the model's actual output but
    `grounding_prompts.parse_pred_boxes` returns `None`, check whether
    `skip_special_tokens=False` actually made it into your version of the
    decode call -- `dragon_sft_grpo/README.md` documents losing a full
    training cycle to exactly this mistake on a different model.
-5. **`enable_thinking` behavior**: with the shipped config
+6. **`enable_thinking` behavior**: with the shipped config
    (`enable_thinking: true`), generate one sample at low temperature before
    a full GRPO run and eyeball whether the model opens a `<think>` block or
    not -- either is fine (see §1), but knowing which mode you're actually
