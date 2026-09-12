@@ -1,0 +1,16 @@
+# dragon_vlm_interp -- dependencies
+#
+# Shares its model-loading stack with dragon_vlm_sft_grpo (transformers,
+# peft, torch) -- install that project's requirements.txt first, then:
+
+opencv-python     # tiling.py's cv2.resize (per-tile upsample), run_interp.py's overlay rendering
+numpy
+Pillow
+scipy             # tam.py imports this at MODULE level (least_squares uses scipy.optimize) --
+                  # required the moment tam_backend.py does `from tam import ...`, even though
+                  # we only use least_squares/rank_guassian_filter, not tam.py's other functions.
+PyMuPDF           # provides the `fitz` module -- ALSO a module-level import in tam.py (used by
+                  # its LaTeX text-visualization path, which we never call), but Python executes
+                  # the whole module on import regardless -- install it or `from tam import ...`
+                  # raises ImportError before you ever reach our own code. xelatex itself is NOT
+                  # needed since we never call compile_latex_to_jpg/vis_text.
